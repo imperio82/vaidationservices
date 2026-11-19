@@ -1,5 +1,12 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpException, Logger } from '@nestjs/common';
-import type { Response } from 'express';
+import {
+  ArgumentsHost,
+  BadRequestException,
+  Catch,
+  ExceptionFilter,
+  HttpException,
+  Logger,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { AppError, ErrorCode, ErrorDetail } from './app-error';
 import { ERROR_MESSAGES } from './error-messages';
 
@@ -13,12 +20,17 @@ interface ErrorResponse {
   headers?: Record<string, string>;
 }
 
-/** Error del body parser de Express cuando el JSON está mal formado. */
-function isJsonParseError(exception: unknown): boolean {
+/**
+ * JSON mal formado. Express lanza un SyntaxError con `type: 'entity.parse.failed'` y Nest lo
+ * convierte en un BadRequestException sin causa. El código propio nunca lanza
+ * BadRequestException (usa AppError), así que un 400 de Nest en una petición con cuerpo JSON
+ * solo puede venir del body parser.
+ */
+function isJsonParseError(exception: unknown, request: Request): boolean {
+  if ((exception as { type?: unknown } | null)?.type === 'entity.parse.failed') return true;
   return (
-    typeof exception === 'object' &&
-    exception !== null &&
-    (exception as { type?: unknown }).type === 'entity.parse.failed'
+    exception instanceof BadRequestException &&
+    /json/i.test(request.headers['content-type'] ?? '')
   );
 }
 
@@ -28,22 +40,23 @@ export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
-    const response = host.switchToHttp().getResponse<Response>();
-    const { status, body, headers } = this.toResponse(exception);
+    const http = host.switchToHttp();
+    const response = http.getResponse<Response>();
+    const { status, body, headers } = this.toResponse(exception, http.getRequest<Request>());
     if (headers) {
       for (const [name, value] of Object.entries(headers)) response.setHeader(name, value);
     }
     response.status(status).json(body);
   }
 
-  private toResponse(exception: unknown): ErrorResponse {
+  private toResponse(exception: unknown, request: Request): ErrorResponse {
     if (exception instanceof AppError) {
       const error: ErrorBody['error'] = { code: exception.code, message: exception.message };
       if (exception.details?.length) error.details = exception.details;
       return { status: exception.status, body: { error }, headers: exception.headers };
     }
 
-    if (isJsonParseError(exception)) {
+    if (isJsonParseError(exception, request)) {
       return {
         status: 400,
         body: {
