@@ -12,12 +12,38 @@ Servicio Node.js (NestJS + TypeScript) que **registra o verifica personas por c�
 
 ## Antes de empezar (resumen)
 
+**Contenido del README** (cada enlace lleva a su sección):
+
+- [Correr con Docker (un solo comando)](#correr-con-docker-un-solo-comando)
+- [Correr en modo desarrollo](#correr-en-modo-desarrollo)
+  - [Requisitos](#requisitos)
+  - [Pasos](#pasos)
+  - [Variables de entorno](#variables-de-entorno)
+- [Probar el servicio](#probar-el-servicio)
+  - [Probar con Postman (recomendado)](#probar-con-postman-recomendado)
+  - [Probar con curl](#probar-con-curl)
+- [Pruebas automatizadas](#pruebas-automatizadas)
+- [Cómo encaja en la prevención de fraude](#cómo-encaja-en-la-prevención-de-fraude)
+- [API](#api)
+  - [Body de POST /validations](#body-de-post-validations)
+  - [Cómo se decide el veredicto (registro)](#cómo-se-decide-el-veredicto-registro)
+  - [Regla de coincidencia (cédula ya registrada)](#regla-de-coincidencia-cédula-ya-registrada)
+  - [Colección de Postman](#colección-de-postman)
+  - [Ejemplos curl](#ejemplos-curl)
+  - [Errores](#errores)
+- [Auditoría (DynamoDB Local)](#auditoría-dynamodb-local)
+- [Arquitectura](#arquitectura)
+- [Decisiones](#decisiones)
+- [Logs y datos personales](#logs-y-datos-personales)
+- [Mejoras futuras](#mejoras-futuras)
+- Documentos aparte: [observaciones de la puesta en marcha y mejoras futuras](docs/observaciones.md), [especificación técnica](_bmad-output/specs/spec-validation-service/SPEC.md) y [colección de Postman](postman/validation-service.postman_collection.json)
+
 **1. Requisitos**
 
 - Para correrlo con Docker (recomendado): Docker con Docker Compose. Nada más.
 - Para correrlo de forma normal: Node.js 20 o superior y npm, más Docker para MongoDB y DynamoDB Local.
 
-**2. Crea el archivo `.env`** en la raíz del proyecto (al lado de `package.json`) con este contenido. Es el mismo de `.env.example`, así que también puedes copiarlo con `cp .env.example .env` (en PowerShell: `copy .env.example .env`).
+**2. Crea el archivo `.env`** en la raíz del proyecto (al lado de `package.json`) con este contenido. Es el de `.env.example` más la key de Nationalize; si copias la plantilla con `cp .env.example .env` (en PowerShell: `copy .env.example .env`), la key queda vacía.
 
 ```dotenv
 PORT=3000
