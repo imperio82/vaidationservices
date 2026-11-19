@@ -5,6 +5,7 @@ export const ERROR_MESSAGES = {
   VALIDATION_NOT_FOUND: 'No existe una validación con ese id',
   IDENTITY_MISMATCH: 'Alerta: los datos ingresados no coinciden con el registro de este documento',
   NAME_NOT_PROCESSABLE: 'El servicio externo no pudo procesar el nombre',
+  NAME_NOT_PROCESSABLE_DETAIL: 'El nombre no pudo ser analizado; revisa que sea un nombre real',
   EXTERNAL_SERVICE_ERROR: 'El servicio de nacionalidad no está disponible, intenta más tarde',
   EXTERNAL_RATE_LIMITED:
     'Se alcanzó el límite de consultas del servicio de nacionalidad, intenta más tarde',

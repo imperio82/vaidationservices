@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ERROR_MESSAGES } from '../../common/errors/error-messages';
 
 /** Catálogo de mensajes de entrada (api-contract.md). Nunca se repite el valor recibido. */
 export const MSG = {
@@ -9,7 +10,7 @@ export const MSG = {
       'El nombre solo puede contener letras, espacios, apóstrofos y guiones, y debe empezar por una letra',
     TOO_SHORT: 'El nombre debe tener al menos 2 caracteres',
     TOO_LONG: 'El nombre no puede superar 100 caracteres',
-    NOT_PROCESSABLE: 'El nombre no pudo ser analizado; revisa que sea un nombre real',
+    NOT_PROCESSABLE: ERROR_MESSAGES.NAME_NOT_PROCESSABLE_DETAIL,
   },
   documentNumber: {
     REQUIRED: 'El número de documento es obligatorio',
