@@ -1,4 +1,7 @@
-﻿_bmad/
+_bmad/
 .claude/
 node_modules/
 .env
+dist/
+coverage/
+*.tsbuildinfo
