@@ -160,6 +160,17 @@ describe('RegisterOrVerifyUseCase', () => {
     expect(repo.docs.size).toBe(0);
   });
 
+  it('si además falla el borrado de compensación, sigue lanzando AUDIT_WRITE_FAILED', async () => {
+    audit.fail = true;
+    repo.deleteById = async () => {
+      throw new Error('Mongo caído');
+    };
+    await expect(useCase.execute(base)).rejects.toMatchObject({
+      status: 500,
+      code: 'AUDIT_WRITE_FAILED',
+    });
+  });
+
   it('si falla la auditoría al verificar, lanza AUDIT_WRITE_FAILED sin tocar el registro', async () => {
     const { validation } = await useCase.execute(base);
     audit.fail = true;
@@ -183,5 +194,17 @@ describe('GetValidationUseCase', () => {
       status: 404,
       code: 'VALIDATION_NOT_FOUND',
     });
+
+    const saved = await repo.insert({
+      name: 'jhon garcia',
+      nameNormalized: 'jhon garcia',
+      firstNameSent: 'jhon',
+      documentNumber: '1020304050',
+      countryCode: null,
+      nationality: JHON,
+      verification: { status: 'NOT_EVALUATED', matchedProbability: null, threshold: 0.1 },
+      createdAt: new Date(),
+    });
+    await expect(useCase.execute(saved.id)).resolves.toEqual(saved);
   });
 });

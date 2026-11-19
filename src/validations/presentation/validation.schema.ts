@@ -46,6 +46,8 @@ const notAborted = {
 const name = z
   .string({ error: (iss) => (iss.input == null ? MSG.name.REQUIRED : MSG.name.INVALID_TYPE) })
   .trim()
+  // Unifica tildes enviadas en NFD (letra + diacrítico combinante) para que pasen NAME_PATTERN.
+  .normalize('NFC')
   .min(1, { error: MSG.name.REQUIRED, abort: true })
   .min(2, { error: MSG.name.TOO_SHORT, ...notAborted })
   .max(100, { error: MSG.name.TOO_LONG, ...notAborted })

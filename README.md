@@ -35,6 +35,8 @@ npm run table:create
 npm run build && npm start      # o, en desarrollo: npm run start:dev
 ```
 
+> **Importante:** DynamoDB Local corre en memoria (`-inMemory`), mientras que MongoDB persiste en un volumen. Cada vez que se reinicia el contenedor (`docker compose up`, `restart`, reinicio de Docker) la tabla de auditoría desaparece y todos los POST responden `500 AUDIT_WRITE_FAILED`. Vuelve a ejecutar `npm run table:create` después de cada `docker compose up` o reinicio.
+
 El servicio escucha en `http://localhost:3000`. Si falta una variable obligatoria o es inválida, la app no arranca y lo indica.
 
 ### Variables de entorno
@@ -193,6 +195,7 @@ Todos los errores tienen la forma `{ "error": { "code", "message", "details?" } 
 | 400 | `VALIDATION_ERROR` | Body inválido, incompleto, con campos extra o JSON mal formado |
 | 400 | `INVALID_ID` | `:id` no es un ObjectId (24 hex) |
 | 404 | `VALIDATION_NOT_FOUND` | No existe el id |
+| 404 | `NOT_FOUND` | Ruta inexistente (fuera de `POST /validations` y `GET /validations/:id`) |
 | 409 | `IDENTITY_MISMATCH` | La cédula existe pero el nombre o el país no coinciden |
 | 422 | `NAME_NOT_PROCESSABLE` | Al registrar: Nationalize rechaza el nombre |
 | 502 | `EXTERNAL_SERVICE_ERROR` | Al registrar: timeout, error de red, 5xx o respuesta inesperada tras 1 reintento; o 401/402 (configuración) |

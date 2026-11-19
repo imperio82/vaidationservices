@@ -4,6 +4,6 @@ module.exports = {
   testEnvironment: 'node',
   moduleFileExtensions: ['ts', 'js', 'json'],
   testMatch: ['<rootDir>/test/e2e/**/*.e2e-spec.ts'],
-  transform: { '^.+\.ts$': 'ts-jest' },
+  transform: { '^.+\\.ts$': 'ts-jest' },
   testTimeout: 60000,
 };

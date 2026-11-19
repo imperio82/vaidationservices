@@ -7,6 +7,7 @@ import { Db } from 'mongodb';
 import request from 'supertest';
 import { NATIONALITY_PROVIDER } from '../../src/validations/application/ports/nationality.provider.port';
 import {
+  DuplicateDocumentError,
   VALIDATION_REPOSITORY,
   ValidationRepository,
 } from '../../src/validations/application/ports/validation.repository.port';
@@ -343,6 +344,37 @@ describe('Validations API (e2e)', () => {
         expect(doc).toMatchObject({ countryCode: null, nationality: { topCountryId: 'CO' } });
       }
       expect(nationalize.calls).toHaveLength(3);
+      const items = putItems();
+      expect(items).toHaveLength(3);
+      for (const item of items) {
+        expect(item).toMatchObject({ eventType: 'REGISTERED', status: 'NOT_EVALUATED' });
+        expect(item).not.toHaveProperty('countryCode');
+      }
+    });
+
+    it('acepta un nombre enviado en NFD (tildes como diacríticos combinantes)', async () => {
+      const nfdName = 'Jhon García'.normalize('NFD');
+      expect(nfdName).not.toBe('Jhon García');
+      const res = await post({ name: nfdName, documentNumber: '3000000300', countryCode: 'CO' });
+      expect(res.status).toBe(201);
+      const doc = await db.collection('validations').findOne({ documentNumber: '3000000300' });
+      expect(doc).toMatchObject({ name: 'Jhon García', nameNormalized: 'jhon garcia', firstNameSent: 'jhon' });
+    });
+
+    it('el índice único de Mongo rechaza una cédula repetida con DuplicateDocumentError', async () => {
+      const record = {
+        name: 'jhon garcia',
+        nameNormalized: 'jhon garcia',
+        firstNameSent: 'jhon',
+        documentNumber: '3000000400',
+        countryCode: null,
+        nationality: { topCountryId: null, count: 0, countries: [] },
+        verification: { status: 'NOT_EVALUATED' as const, matchedProbability: null, threshold: 0.1 },
+        createdAt: new Date(),
+      };
+      await repository.insert({ ...record });
+      await expect(repository.insert({ ...record })).rejects.toBeInstanceOf(DuplicateDocumentError);
+      expect(await countDocs('3000000400')).toBe(1);
     });
 
     it('AC-24 cédula sin país registrado verificada con countryCode → 200 VERIFIED', async () => {
@@ -495,6 +527,29 @@ describe('Validations API (e2e)', () => {
       expect(nationalize.calls).toHaveLength(1);
 
       for (const doc of ['4000000181', '4000000182', '4000000183']) expect(await countDocs(doc)).toBe(0);
+      expect(putItems()).toHaveLength(0);
+    });
+
+    it('200 con formato inesperado → 502; 402 → 502; 404 → 502; 422 Missing → 500; 429 sin reset → 503 sin Retry-After', async () => {
+      const cases: { behavior: FakeBehavior; doc: string; status: number; code: string }[] = [
+        { behavior: { status: 200, body: { unexpected: true } }, doc: '4000000191', status: 502, code: 'EXTERNAL_SERVICE_ERROR' },
+        { behavior: { status: 200, body: 'not json' }, doc: '4000000192', status: 502, code: 'EXTERNAL_SERVICE_ERROR' },
+        { behavior: { status: 402, body: { error: 'Subscription is not active' } }, doc: '4000000193', status: 502, code: 'EXTERNAL_SERVICE_ERROR' },
+        { behavior: { status: 404, body: { error: 'Not found' } }, doc: '4000000194', status: 502, code: 'EXTERNAL_SERVICE_ERROR' },
+        { behavior: { status: 422, body: { error: "Missing 'name' parameter" } }, doc: '4000000195', status: 500, code: 'INTERNAL_ERROR' },
+        { behavior: { status: 429, body: { error: 'Request limit reached' } }, doc: '4000000196', status: 503, code: 'EXTERNAL_RATE_LIMITED' },
+      ];
+      for (const { behavior, doc, status, code } of cases) {
+        nationalize.reset();
+        nationalize.enqueue(behavior);
+        const res = await post({ name: 'jhon garcia', documentNumber: doc, countryCode: 'CO' });
+        expect(res.status).toBe(status);
+        expect(res.body.error.code).toBe(code);
+        expect(nationalize.calls).toHaveLength(1);
+        expect(JSON.stringify(res.body)).not.toMatch(/Subscription|Missing|limit reached|Not found/);
+        if (status === 503) expect(res.headers).not.toHaveProperty('retry-after');
+        expect(await countDocs(doc)).toBe(0);
+      }
       expect(putItems()).toHaveLength(0);
     });
   });

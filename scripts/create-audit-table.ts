@@ -16,8 +16,12 @@ function loadDotEnv(): void {
   const path = resolve(__dirname, '..', '.env');
   if (!existsSync(path)) return;
   for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
-    if (match && process.env[match[1]] === undefined) process.env[match[1]] = match[2];
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);
+    if (!match || process.env[match[1]] !== undefined) continue;
+    let value = match[2].trim();
+    const quoted = /^(['"])(.*)\1$/.exec(value);
+    if (quoted) value = quoted[2];
+    process.env[match[1]] = value;
   }
 }
 
