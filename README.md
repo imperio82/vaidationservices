@@ -31,7 +31,9 @@ Servicio Node.js (NestJS + TypeScript) que **registra o verifica personas por c�
   - [Colección de Postman](#colección-de-postman)
   - [Ejemplos curl](#ejemplos-curl)
   - [Errores](#errores)
-- [Auditoría (DynamoDB Local)](#auditoría-dynamodb-local)
+- [Auditoría y consulta de datos (DynamoDB y MongoDB)](#auditoría-y-consulta-de-datos-dynamodb-y-mongodb)
+  - [Cómo ver las auditorías en DynamoDB Local](#cómo-ver-las-auditorías-en-dynamodb-local)
+  - [Cómo ver los datos en MongoDB](#cómo-ver-los-datos-en-mongodb)
 - [Arquitectura](#arquitectura)
 - [Decisiones](#decisiones)
 - [Logs y datos personales](#logs-y-datos-personales)
@@ -371,7 +373,7 @@ Todos los errores tienen la forma `{ "error": { "code", "message", "details?" } 
 
 Ante cualquier fallo de Nationalize **no se escribe nada**: no se registra a nadie sin predicción. Los mensajes de la API externa nunca se reenvían al cliente.
 
-## Auditoría (DynamoDB Local)
+## Auditoría y consulta de datos (DynamoDB y MongoDB)
 
 Tabla `validation_audit`, `PAY_PER_REQUEST`:
 
@@ -380,13 +382,87 @@ Tabla `validation_audit`, `PAY_PER_REQUEST`:
 - No guarda nombres. El `Put` es condicional (`attribute_not_exists(sk)`).
 - Toda respuesta `201`, `200` o `409` tiene su ítem; si la escritura falla, la respuesta es `500 AUDIT_WRITE_FAILED`.
 
-Consultar los eventos de una cédula en DynamoDB Local (con AWS CLI):
+### Cómo ver las auditorías en DynamoDB Local
+
+#### Opción 1: Con comandos Node.js ejecutados en el contenedor (PowerShell)
+
+**1. Verificar que exista la tabla**
+
+Ejecuta este comando en PowerShell:
+
+```powershell
+docker exec validations-app node -e "
+const { DynamoDBClient, ListTablesCommand } = require('@aws-sdk/client-dynamodb');
+const client = new DynamoDBClient({
+  endpoint: 'http://dynamodb:8000',
+  region: 'us-east-1',
+  credentials: { accessKeyId: 'local', secretAccessKey: 'local' }
+});
+client.send(new ListTablesCommand({}))
+  .then(r => console.log('Tablas:', r.TableNames))
+  .catch(console.error);
+"
+```
+
+Deberías obtener algo parecido a:
+
+```text
+Tablas: [ 'validation_audit' ]
+```
+
+**2. Consultar todas las auditorías**
+
+Si existe la tabla, ejecuta:
+
+```powershell
+docker exec validations-app node -e "
+const { DynamoDBClient, ScanCommand } = require('@aws-sdk/client-dynamodb');
+const client = new DynamoDBClient({
+  endpoint: 'http://dynamodb:8000',
+  region: 'us-east-1',
+  credentials: { accessKeyId: 'local', secretAccessKey: 'local' }
+});
+client.send(new ScanCommand({ TableName: 'validation_audit' }))
+  .then(r => console.log(JSON.stringify(r.Items, null, 2)))
+  .catch(console.error);
+"
+```
+
+Esto te mostrará los eventos almacenados en DynamoDB Local.
+
+#### Opción 2: Consultar eventos de una cédula específica con AWS CLI
 
 ```bash
 aws dynamodb query --endpoint-url http://localhost:8000 --region us-east-1 \
   --table-name validation_audit \
   --key-condition-expression "documentNumber = :d" \
   --expression-attribute-values '{":d":{"S":"1020304050"}}'
+```
+
+---
+
+### Cómo ver los datos en MongoDB
+
+Para inspeccionar los documentos guardados en la colección de MongoDB:
+
+#### Usando `mongosh` dentro del contenedor de Mongo:
+
+```powershell
+docker exec -it validations-mongo mongosh validations --eval "db.validations.find().pretty()"
+```
+
+#### Usando Node.js dentro del contenedor de la app:
+
+```powershell
+docker exec validations-app node -e "
+const { MongoClient } = require('mongodb');
+const client = new MongoClient('mongodb://mongo:27017/validations');
+client.connect()
+  .then(() => client.db().collection('validations').find().toArray())
+  .then(docs => console.log(JSON.stringify(docs, null, 2)))
+  .then(() => client.close())
+  .catch(console.error);
+"
 ```
 
 ## Arquitectura
