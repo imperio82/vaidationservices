@@ -6,6 +6,11 @@ services:
       - "27017:27017"
     volumes:
       - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   dynamodb:
     image: amazon/dynamodb-local
@@ -13,6 +18,52 @@ services:
     command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
     ports:
       - "8000:8000"
+
+  # Crea la tabla de auditoría (idempotente) y termina. Reintenta mientras DynamoDB Local arranca.
+  audit-table-init:
+    build:
+      context: .
+      target: build
+    container_name: validations-audit-table-init
+    command: >
+      sh -c "for i in 1 2 3 4 5 6 7 8 9 10; do
+      npx ts-node scripts/create-audit-table.ts && exit 0;
+      echo 'DynamoDB Local aún no responde; reintentando...'; sleep 2;
+      done; exit 1"
+    environment:
+      DYNAMO_ENDPOINT: http://dynamodb:8000
+      DYNAMO_TABLE: validation_audit
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+    depends_on:
+      dynamodb:
+        condition: service_started
+
+  app:
+    build:
+      context: .
+      target: runtime
+    container_name: validations-app
+    # .env es opcional: solo hace falta para NATIONALIZE_API_KEY o para cambiar el umbral
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://mongo:27017/validations
+      DYNAMO_ENDPOINT: http://dynamodb:8000
+      DYNAMO_TABLE: validation_audit
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+    ports:
+      - "3000:3000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      audit-table-init:
+        condition: service_completed_successfully
 
 volumes:
   mongo-data:

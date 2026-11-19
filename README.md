@@ -10,13 +10,75 @@ Servicio Node.js (NestJS + TypeScript) que **registra o verifica personas por c�
 
 > **Una persona por cédula.** `documentNumber` es único. Una cédula repetida responde `200 VERIFIED` o `409 IDENTITY_MISMATCH`, **nunca crea otro registro**, no vuelve a consultar Nationalize y no modifica el registro existente.
 
-## Requisitos
+## Inicio rápido (un solo comando)
+
+Solo necesitas Docker con Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Esto levanta MongoDB, DynamoDB Local, crea la tabla de auditoría y arranca el servicio en `http://localhost:3000`. No hace falta instalar Node ni crear `.env`.
+
+```bash
+# Registro (cédula nueva) -> 201
+curl -X POST http://localhost:3000/validations -H "Content-Type: application/json" \
+  -d '{"name":"Jhon Garcia","documentNumber":"1020304050","countryCode":"CO"}'
+
+# Verificación (misma cédula, nombre equivalente) -> 200
+curl -X POST http://localhost:3000/validations -H "Content-Type: application/json" \
+  -d '{"name":"JHON garcía","documentNumber":"1020304050","countryCode":"CO"}'
+
+# Alerta (misma cédula, otro nombre) -> 409
+curl -X POST http://localhost:3000/validations -H "Content-Type: application/json" \
+  -d '{"name":"Pedro Lopez","documentNumber":"1020304050"}'
+```
+
+En **Windows PowerShell** (5.1 o 7+; arma el JSON con `ConvertTo-Json` para evitar problemas de comillas):
+
+```powershell
+$u = "http://localhost:3000/validations"
+
+# Registro -> 201
+$body = @{ name = "Jhon Garcia"; documentNumber = "1020304050"; countryCode = "CO" } | ConvertTo-Json
+$r = Invoke-RestMethod -Method Post -Uri $u -ContentType "application/json" -Body $body; $r
+
+# Verificación -> 200
+$body = @{ name = "JHON garcia"; documentNumber = "1020304050"; countryCode = "CO" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri $u -ContentType "application/json" -Body $body
+
+# Alerta -> 409 (PowerShell trata los 4xx como error; así se ve el cuerpo de la respuesta)
+$body = @{ name = "Pedro Lopez"; documentNumber = "1020304050" } | ConvertTo-Json
+try { Invoke-RestMethod -Method Post -Uri $u -ContentType "application/json" -Body $body } catch { $_.ErrorDetails.Message }
+
+# Consulta del registro creado en el primer paso
+Invoke-RestMethod -Uri "$u/$($r.id)"
+```
+
+También puedes usar la colección de Postman de la carpeta `postman/`.
+
+> **Límite de Nationalize.io:** sin API key permite **10 consultas al día** (solo los registros nuevos consultan la API). Si se agotan, el servicio responde `503 EXTERNAL_RATE_LIMITED` con `Retry-After`. Para más consultas, crea una cuenta gratuita en nationalize.io y define `NATIONALIZE_API_KEY` en un archivo `.env` (lo lee el contenedor si existe).
+
+Para detenerlo: `docker compose down`.
+
+## Cómo encaja en la prevención de fraude
+
+El servicio no solo guarda registros: trata cada cédula como una identidad y detecta cuando alguien intenta usarla con datos que no corresponden.
+
+- **Suplantación de identidad.** Si llega una cédula ya registrada con otro nombre o con otro país, responde `409 IDENTITY_MISMATCH` y deja un evento `MISMATCH_ALERT`. Es la señal típica de alguien usando un documento ajeno.
+- **No filtrar información al atacante.** La alerta no dice qué campo falló ni devuelve los datos guardados. Quien prueba combinaciones de nombre y país no aprende nada del registro real. El detalle (`mismatchFields`) solo queda en la auditoría interna.
+- **Historial por cédula para detectar patrones.** La auditoría usa `documentNumber` como llave de partición y la fecha como llave de ordenamiento. Con una sola consulta se obtienen todos los intentos sobre un documento en un rango de fechas: por ejemplo, muchas alertas seguidas sobre la misma cédula, o intentos desde países distintos.
+- **Coherencia de la información.** Al registrar, el país declarado se compara con la nacionalidad probable del nombre (`APPROVED`, `REJECTED`, `INCONCLUSIVE`). Es una heurística, no una prueba: sirve como una señal más para combinar con otras (validación del documento, biometría, listas restrictivas).
+- **Todo intento queda auditado y nada queda a medias.** Si la auditoría falla, el registro se revierte. No existe un registro sin su evento.
+- **Minimización de datos.** A la API externa solo sale el primer nombre; la auditoría no guarda el nombre y los logs enmascaran la cédula (`******4050`).
+
+## Requisitos (desarrollo sin contenedor de la app)
 
 - Node.js 20 LTS o superior (probado con 22) y npm.
-- Docker con Docker Compose (solo para levantar MongoDB y DynamoDB Local; las pruebas no lo necesitan).
-- Acceso a internet para Nationalize.io al usar el servicio (no hace falta API key).
+- Docker con Docker Compose para MongoDB y DynamoDB Local (las pruebas no lo necesitan).
+- Acceso a internet para Nationalize.io al usar el servicio.
 
-## Puesta en marcha
+## Puesta en marcha (desarrollo)
 
 ```bash
 # 1. Dependencias
@@ -25,8 +87,8 @@ npm install
 # 2. Variables de entorno
 cp .env.example .env
 
-# 3. MongoDB (27017) y DynamoDB Local (8000)
-docker compose up -d
+# 3. Solo MongoDB (27017) y DynamoDB Local (8000), sin el contenedor de la app
+docker compose up -d mongo dynamodb
 
 # 4. Tabla de auditoría en DynamoDB Local (idempotente: si ya existe, no hace nada)
 npm run table:create
@@ -35,7 +97,7 @@ npm run table:create
 npm run build && npm start      # o, en desarrollo: npm run start:dev
 ```
 
-> **Importante:** DynamoDB Local corre en memoria (`-inMemory`), mientras que MongoDB persiste en un volumen. Cada vez que se reinicia el contenedor (`docker compose up`, `restart`, reinicio de Docker) la tabla de auditoría desaparece y todos los POST responden `500 AUDIT_WRITE_FAILED`. Vuelve a ejecutar `npm run table:create` después de cada `docker compose up` o reinicio.
+> **Importante:** DynamoDB Local corre en memoria (`-inMemory`), mientras que MongoDB persiste en un volumen. Cada vez que se reinicia el contenedor (`docker compose up`, `restart`, reinicio de Docker) la tabla de auditoría desaparece y todos los POST responden `500 AUDIT_WRITE_FAILED`. En modo desarrollo, vuelve a ejecutar `npm run table:create` después de cada reinicio de DynamoDB Local. Con `docker compose up --build` (inicio rápido) la tabla se crea sola en cada arranque.
 
 El servicio escucha en `http://localhost:3000`. Si falta una variable obligatoria o es inválida, la app no arranca y lo indica.
 
@@ -54,6 +116,8 @@ El servicio escucha en `http://localhost:3000`. Si falta una variable obligatori
 | `MATCH_THRESHOLD` | `0.10` | Umbral de coincidencia de país, rango [0, 1], límite inclusivo |
 
 ## Pruebas
+
+En cada push, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto, corre las pruebas unitarias y e2e, construye la imagen Docker y valida el `docker-compose.yml`.
 
 ```bash
 npm test           # unitarias: dominio y casos de uso con puertos falsos
@@ -268,3 +332,11 @@ El detalle está en `_bmad-output/specs/spec-validation-service/`.
 - `documentNumber` se loguea enmascarado (`******4050`); la API key nunca se loguea.
 - Las alertas `MISMATCH_ALERT` se loguean en nivel `warn`; los errores de configuración de Nationalize (401/402) en `error`.
 - Las respuestas de error nunca repiten el valor recibido ni los datos guardados.
+
+## Mejoras futuras
+
+Detalladas en [`docs/observaciones.md`](docs/observaciones.md) (sección 7):
+
+- **Integración con la API de AUCO:** verificación de la cédula contra el registro oficial (`/validate/background`) detrás del mismo patrón de puertos, consulta asíncrona de antecedentes en listas restrictivas y un endpoint de webhooks idempotente.
+- **Movimientos por cédula:** `GET /validations/audit/:documentNumber?from=&to=` sobre las llaves actuales de DynamoDB (una sola `Query`, sin escanear).
+- **Alertas de fraude en tiempo real:** `GET /alerts/stream` (Server-Sent Events) con reglas de riesgo, por ejemplo varias alertas sobre la misma cédula en pocos minutos; en AWS, con DynamoDB Streams, Lambda y API Gateway WebSocket.

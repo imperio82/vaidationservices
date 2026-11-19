@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Build y pruebas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Binario de MongoDB que descarga mongodb-memory-server para las pruebas e2e
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:e2e
+
+  docker:
+    name: Imagen Docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construir la imagen de producción
+        run: docker build --target runtime -t validation-service .
+      - name: Validar docker-compose.yml
+        run: docker compose config --quiet

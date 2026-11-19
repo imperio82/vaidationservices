@@ -1,0 +1,13 @@
+node_modules
+dist
+coverage
+.git
+.env
+_bmad
+_bmad-output
+.claude
+docs
+postman
+test
+*.tsbuildinfo
+*.log
