@@ -20,6 +20,28 @@ docker compose up --build
 
 Esto levanta MongoDB, DynamoDB Local, crea la tabla de auditoría y arranca el servicio en `http://localhost:3000`. No hace falta instalar Node ni crear `.env`.
 
+Cuando en la consola aparezca `Servicio de validaciones escuchando en el puerto 3000`, el servicio está listo.
+
+### Probar con Postman (recomendado)
+
+1. Abre Postman y haz clic en **Import**.
+2. Selecciona el archivo `postman/validation-service.postman_collection.json` de este repositorio.
+3. Abre la colección **Servicio de validaciones**. La variable `baseUrl` ya apunta a `http://localhost:3000`.
+4. Ejecuta las carpetas **en orden**, o toda la colección con el **Runner** (clic derecho en la colección → *Run collection*):
+
+| Carpeta | Qué muestra |
+|---|---|
+| 1. Registro (cédula nueva) | `201` con veredicto `APPROVED`, `REJECTED` y `NOT_EVALUATED`. Cada ejecución genera cédulas nuevas |
+| 2. Verificación (cédula ya registrada) | `200 VERIFIED` con los datos en otro formato y `409 IDENTITY_MISMATCH` con otro nombre o país |
+| 3. Consulta por id | `200` con el registro guardado, `404` y `400` |
+| 4. Errores de entrada (400) | Detalle por campo: varios errores a la vez, tipos, formato, campo no permitido y JSON roto |
+
+Cada petición trae su descripción (para qué sirve y por qué responde lo que responde) y pruebas que comprueban el código y el cuerpo, cuyo resultado se ve en la pestaña *Test Results* o en el resumen del Runner.
+
+> La carpeta 1 hace 3 consultas a Nationalize por ejecución. Sin API key el límite es de 10 al día, así que alcanza para unas 3 ejecuciones completas (ver el aviso de abajo). Las carpetas 2, 3 y 4 no gastan cuota.
+
+### Probar con curl
+
 ```bash
 # Registro (cédula nueva) -> 201
 curl -X POST http://localhost:3000/validations -H "Content-Type: application/json" \
