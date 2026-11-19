@@ -42,12 +42,12 @@ MATCH_THRESHOLD=0.10
 
 **3. Elige cómo correrlo**
 
-- **Con Docker (un solo comando):** `docker compose up --build`. Ver [Inicio rápido](#inicio-rápido-un-solo-comando).
-- **Normal (Node en tu máquina):** levantar las bases de datos, crear la tabla y arrancar. Ver [Puesta en marcha (desarrollo)](#puesta-en-marcha-desarrollo).
+- **Con Docker (un solo comando):** `docker compose up --build`. Ver [Correr con Docker](#correr-con-docker-un-solo-comando).
+- **Normal (Node en tu máquina):** levantar las bases de datos, crear la tabla y arrancar. Ver [Correr en modo desarrollo](#correr-en-modo-desarrollo).
 
-En ambos casos el servicio queda en `http://localhost:3000` y se prueba con la colección de Postman (`postman/`).
+En ambos casos el servicio queda en `http://localhost:3000` y se prueba con la colección de Postman (ver [Probar el servicio](#probar-el-servicio)).
 
-## Inicio rápido (un solo comando)
+## Correr con Docker (un solo comando)
 
 Solo necesitas Docker con Docker Compose:
 
@@ -55,9 +55,62 @@ Solo necesitas Docker con Docker Compose:
 docker compose up --build
 ```
 
-Esto levanta MongoDB, DynamoDB Local, crea la tabla de auditoría y arranca el servicio en `http://localhost:3000`. No hace falta instalar Node ni crear `.env`.
+Esto levanta MongoDB, DynamoDB Local, crea la tabla de auditoría y arranca el servicio en `http://localhost:3000`. No hace falta instalar Node; el `.env` es opcional (ver [Antes de empezar](#antes-de-empezar-resumen)).
 
 Cuando en la consola aparezca `Servicio de validaciones escuchando en el puerto 3000`, el servicio está listo.
+
+Para detenerlo: `docker compose down`.
+
+## Correr en modo desarrollo
+
+Node corre en tu máquina y Docker solo levanta las bases de datos.
+
+### Requisitos
+
+- Node.js 20 LTS o superior (probado con 22) y npm.
+- Docker con Docker Compose para MongoDB y DynamoDB Local (las pruebas no lo necesitan).
+- Acceso a internet para Nationalize.io al usar el servicio.
+
+### Pasos
+
+```bash
+# 1. Dependencias
+npm install
+
+# 2. Variables de entorno: crea el .env con el contenido de «Antes de empezar» (incluye la key)
+#    o cópialo de la plantilla (sin key): cp .env.example .env   (PowerShell: copy .env.example .env)
+
+# 3. Solo MongoDB (27017) y DynamoDB Local (8000), sin el contenedor de la app
+docker compose up -d mongo dynamodb
+
+# 4. Tabla de auditoría en DynamoDB Local (idempotente: si ya existe, no hace nada)
+npm run table:create
+
+# 5. Arranque
+npm run build && npm start      # o, en desarrollo: npm run start:dev
+```
+
+> **Importante:** DynamoDB Local corre en memoria (`-inMemory`), mientras que MongoDB persiste en un volumen. Cada vez que se reinicia el contenedor (`docker compose up`, `restart`, reinicio de Docker) la tabla de auditoría desaparece y todos los POST responden `500 AUDIT_WRITE_FAILED`. En modo desarrollo, vuelve a ejecutar `npm run table:create` después de cada reinicio de DynamoDB Local. Con `docker compose up --build` (modo Docker) la tabla se crea sola en cada arranque.
+
+El servicio escucha en `http://localhost:3000`. Si falta una variable obligatoria o es inválida, la app no arranca y lo indica.
+
+### Variables de entorno
+
+| Variable | Por defecto (`.env.example`) | Notas |
+|---|---|---|
+| `PORT` | `3000` | |
+| `MONGO_URI` | `mongodb://localhost:27017/validations` | La base de datos sale de la URI |
+| `DYNAMO_ENDPOINT` | `http://localhost:8000` | Siempre DynamoDB **Local**, nunca AWS real |
+| `DYNAMO_TABLE` | `validation_audit` | |
+| `AWS_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `us-east-1` / `local` / `local` | Valores de relleno para DynamoDB Local |
+| `NATIONALIZE_BASE_URL` | `https://api.nationalize.io` | |
+| `NATIONALIZE_API_KEY` | vacío | **Opcional**: la API funciona sin key. Nunca se loguea |
+| `NATIONALIZE_TIMEOUT_MS` | `3000` | Timeout por intento |
+| `MATCH_THRESHOLD` | `0.10` | Umbral de coincidencia de país, rango [0, 1], límite inclusivo |
+
+## Probar el servicio
+
+Con el servicio corriendo en `http://localhost:3000` (con Docker o en modo desarrollo):
 
 ### Probar con Postman (recomendado)
 
@@ -114,67 +167,9 @@ try { Invoke-RestMethod -Method Post -Uri $u -ContentType "application/json" -Bo
 Invoke-RestMethod -Uri "$u/$($r.id)"
 ```
 
-También puedes usar la colección de Postman de la carpeta `postman/`.
-
 > **Límite de Nationalize.io:** sin API key permite **10 consultas al día** (solo los registros nuevos consultan la API). Si se agotan, el servicio responde `503 EXTERNAL_RATE_LIMITED` con `Retry-After`. Para más consultas, crea una cuenta gratuita en nationalize.io y define `NATIONALIZE_API_KEY` en un archivo `.env` (lo lee el contenedor si existe).
 
-Para detenerlo: `docker compose down`.
-
-## Cómo encaja en la prevención de fraude
-
-El servicio no solo guarda registros: trata cada cédula como una identidad y detecta cuando alguien intenta usarla con datos que no corresponden.
-
-- **Suplantación de identidad.** Si llega una cédula ya registrada con otro nombre o con otro país, responde `409 IDENTITY_MISMATCH` y deja un evento `MISMATCH_ALERT`. Es la señal típica de alguien usando un documento ajeno.
-- **No filtrar información al atacante.** La alerta no dice qué campo falló ni devuelve los datos guardados. Quien prueba combinaciones de nombre y país no aprende nada del registro real. El detalle (`mismatchFields`) solo queda en la auditoría interna.
-- **Historial por cédula para detectar patrones.** La auditoría usa `documentNumber` como llave de partición y la fecha como llave de ordenamiento. Con una sola consulta se obtienen todos los intentos sobre un documento en un rango de fechas: por ejemplo, muchas alertas seguidas sobre la misma cédula, o intentos desde países distintos.
-- **Coherencia de la información.** Al registrar, el país declarado se compara con la nacionalidad probable del nombre (`APPROVED`, `REJECTED`, `INCONCLUSIVE`). Es una heurística, no una prueba: sirve como una señal más para combinar con otras (validación del documento, biometría, listas restrictivas).
-- **Todo intento queda auditado y nada queda a medias.** Si la auditoría falla, el registro se revierte. No existe un registro sin su evento.
-- **Minimización de datos.** A la API externa solo sale el primer nombre; la auditoría no guarda el nombre y los logs enmascaran la cédula (`******4050`).
-
-## Requisitos (desarrollo sin contenedor de la app)
-
-- Node.js 20 LTS o superior (probado con 22) y npm.
-- Docker con Docker Compose para MongoDB y DynamoDB Local (las pruebas no lo necesitan).
-- Acceso a internet para Nationalize.io al usar el servicio.
-
-## Puesta en marcha (desarrollo)
-
-```bash
-# 1. Dependencias
-npm install
-
-# 2. Variables de entorno
-cp .env.example .env
-
-# 3. Solo MongoDB (27017) y DynamoDB Local (8000), sin el contenedor de la app
-docker compose up -d mongo dynamodb
-
-# 4. Tabla de auditoría en DynamoDB Local (idempotente: si ya existe, no hace nada)
-npm run table:create
-
-# 5. Arranque
-npm run build && npm start      # o, en desarrollo: npm run start:dev
-```
-
-> **Importante:** DynamoDB Local corre en memoria (`-inMemory`), mientras que MongoDB persiste en un volumen. Cada vez que se reinicia el contenedor (`docker compose up`, `restart`, reinicio de Docker) la tabla de auditoría desaparece y todos los POST responden `500 AUDIT_WRITE_FAILED`. En modo desarrollo, vuelve a ejecutar `npm run table:create` después de cada reinicio de DynamoDB Local. Con `docker compose up --build` (inicio rápido) la tabla se crea sola en cada arranque.
-
-El servicio escucha en `http://localhost:3000`. Si falta una variable obligatoria o es inválida, la app no arranca y lo indica.
-
-### Variables de entorno
-
-| Variable | Por defecto (`.env.example`) | Notas |
-|---|---|---|
-| `PORT` | `3000` | |
-| `MONGO_URI` | `mongodb://localhost:27017/validations` | La base de datos sale de la URI |
-| `DYNAMO_ENDPOINT` | `http://localhost:8000` | Siempre DynamoDB **Local**, nunca AWS real |
-| `DYNAMO_TABLE` | `validation_audit` | |
-| `AWS_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `us-east-1` / `local` / `local` | Valores de relleno para DynamoDB Local |
-| `NATIONALIZE_BASE_URL` | `https://api.nationalize.io` | |
-| `NATIONALIZE_API_KEY` | vacío | **Opcional**: la API funciona sin key. Nunca se loguea |
-| `NATIONALIZE_TIMEOUT_MS` | `3000` | Timeout por intento |
-| `MATCH_THRESHOLD` | `0.10` | Umbral de coincidencia de país, rango [0, 1], límite inclusivo |
-
-## Pruebas
+## Pruebas automatizadas
 
 En cada push, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto, corre las pruebas unitarias y e2e, construye la imagen Docker y valida el `docker-compose.yml`.
 
@@ -186,6 +181,17 @@ npm run test:e2e   # e2e: app Nest completa con Supertest
 - No usan la red real ni Docker: Nationalize se simula (con la respuesta real de `jhon` como fixture), MongoDB corre con **mongodb-memory-server** y DynamoDB se simula con **aws-sdk-client-mock**.
 - **Aviso:** la primera vez que se corren las pruebas e2e, mongodb-memory-server **descarga el binario de MongoDB** (requiere internet y tarda un poco, solo esa vez). Después funcionan sin conexión.
 - Cubren los criterios de aceptación de `_bmad-output/specs/spec-validation-service/acceptance-criteria.md`: los prioritarios ⭐ (AC-1, 4, 7, 9, 14, 15, 17, 19, 22) y también los opcionales (AC-2, 3, 5, 6, 8, 10, 11, 12, 13, 16, 18, 23, 24).
+
+## Cómo encaja en la prevención de fraude
+
+El servicio no solo guarda registros: trata cada cédula como una identidad y detecta cuando alguien intenta usarla con datos que no corresponden.
+
+- **Suplantación de identidad.** Si llega una cédula ya registrada con otro nombre o con otro país, responde `409 IDENTITY_MISMATCH` y deja un evento `MISMATCH_ALERT`. Es la señal típica de alguien usando un documento ajeno.
+- **No filtrar información al atacante.** La alerta no dice qué campo falló ni devuelve los datos guardados. Quien prueba combinaciones de nombre y país no aprende nada del registro real. El detalle (`mismatchFields`) solo queda en la auditoría interna.
+- **Historial por cédula para detectar patrones.** La auditoría usa `documentNumber` como llave de partición y la fecha como llave de ordenamiento. Con una sola consulta se obtienen todos los intentos sobre un documento en un rango de fechas: por ejemplo, muchas alertas seguidas sobre la misma cédula, o intentos desde países distintos.
+- **Coherencia de la información.** Al registrar, el país declarado se compara con la nacionalidad probable del nombre (`APPROVED`, `REJECTED`, `INCONCLUSIVE`). Es una heurística, no una prueba: sirve como una señal más para combinar con otras (validación del documento, biometría, listas restrictivas).
+- **Todo intento queda auditado y nada queda a medias.** Si la auditoría falla, el registro se revierte. No existe un registro sin su evento.
+- **Minimización de datos.** A la API externa solo sale el primer nombre; la auditoría no guarda el nombre y los logs enmascaran la cédula (`******4050`).
 
 ## API
 
