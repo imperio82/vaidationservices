@@ -1,0 +1,22 @@
+-- se reviso los supuestos, para corregir errores debueltos por la api, para que los errores enviados por el usuario pueda retroalimentar el mensage departe de la api,
+
+--- se reviso la documentacion de la api y los requerimientos paraanalisar las soluciones posibles para lo requerido en la solucion,
+--- en el spec documento de analisis  actualizamos la forma en que se valida la nacionalidad con el nombre tomando los de mayor probabilidad, 
+--- revicion de dcumentos, antes de desarrollo
+
+--- se le pidio a la IA que creara la spec tecnica a partir de los requerimientos de la prueba, con objetivo, alcance, contrato de endpoints, modelo de datos (MongoDB y DynamoDB), manejo de errores, criterios de aceptacion y plan de tareas.
+--- se le pidio a la IA que modificara el manejo de errores para que todo error de datos ingresados por el usuario devuelva el campo, el tipo de error y un mensaje en español, para retroalimentar al usuario.
+--- se le pidio a la IA que cambiara la API externa de REST Countries a Nationalize.io, segun su documentacion, y que mapeara sus errores (401/402 → 502, 422 → 422, 429 → 503).
+--- se le pidio a la IA que agregara el codigo de pais ingresado por el usuario y lo comparara con los paises y probabilidades que devuelve la API (APPROVED, REJECTED o INCONCLUSIVE).
+--- se le pidio a la IA que revisara si existia un flujo de datos; como no existia, se agrego data-flow.md con diagramas de componentes, secuencia y manejo de errores.
+--- se le pidio a la IA que agregara el flujo de registrar o verificar por cedula: si la cedula no esta registrada se valida la nacionalidad y se registra; si ya esta, se compara con lo registrado y, si no coincide, se devuelve una alerta (409). La IA mostro la propuesta antes de modificar la spec y se aprobo.
+---- se reviso el stack cambiandolo a nest.js por mantenibilidad herramientas y esructura agregando principios solid para mejor mantenibilidad 
+--- se le pidio a la IA su opinion sobre cambiar Express por NestJS con principios SOLID y clean code; se aprobo y se le pidio que registrara las decisiones tecnicas en decisions.md: arquitectura por capas (domain, application, infrastructure, presentation), Zod con un pipe propio, Jest en lugar de Vitest y driver nativo de MongoDB sin Mongoose.
+--- se le pidio a la IA que a la API solo se enviara el primer nombre, pidiendo por separado primer nombre, segundo nombre y apellidos (este cambio se reemplazo despues, ver la ultima linea).
+--- se le pidio a la IA que el codigo de pais fuera opcional: sin el, se registra con la prediccion y el estado NOT_EVALUATED; al verificar, el pais solo se compara si viene en la peticion y existe en el registro.
+--- se le pidio a la IA que a la API se enviara el primer nombre normalizado (sin espacios, minusculas, sin tildes) y que agregara un criterio de aceptacion para comprobarlo.
+--- se le pidio a la IA que en DynamoDB la llave de orden fuera fecha del evento + id unico del evento (UUID), dejando el id del registro como atributo aparte.
+--- se le pidio a la IA que fijara la version de Zod (4.1.12) y usara su forma de mensajes personalizados.
+--- se le pidio a la IA que marcara como prioritarios los criterios AC-1, AC-4, AC-7, AC-9, AC-14, AC-15, AC-17, AC-19 y AC-22, dejando el resto como opcional.
+--- se le pidio a la IA que el README explicara que una cedula repetida responde 200 o 409 (una persona por cedula) y que mongodb-memory-server descarga MongoDB la primera vez.
+--- se le pidio a la IA que volviera a un solo campo name con el nombre completo, para cumplir el enunciado ("recibe un nombre y un numero de documento"), quitando firstName, middleName, lastName y el error MULTIPLE_WORDS. El servidor extrae el primer nombre (primera palabra del nombre normalizado) y solo eso se envia a la API; en MongoDB se guardan name, nameNormalized y firstNameSent, y al verificar se compara el nombre completo normalizado y el pais si viene en ambos lados.
