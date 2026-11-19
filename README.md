@@ -10,6 +10,42 @@ Servicio Node.js (NestJS + TypeScript) que **registra o verifica personas por c�
 
 > **Una persona por cédula.** `documentNumber` es único. Una cédula repetida responde `200 VERIFIED` o `409 IDENTITY_MISMATCH`, **nunca crea otro registro**, no vuelve a consultar Nationalize y no modifica el registro existente.
 
+## Antes de empezar (resumen)
+
+**1. Requisitos**
+
+- Para correrlo con Docker (recomendado): Docker con Docker Compose. Nada más.
+- Para correrlo de forma normal: Node.js 20 o superior y npm, más Docker para MongoDB y DynamoDB Local.
+
+**2. Crea el archivo `.env`** en la raíz del proyecto (al lado de `package.json`) con este contenido. Es el mismo de `.env.example`, así que también puedes copiarlo con `cp .env.example .env` (en PowerShell: `copy .env.example .env`).
+
+```dotenv
+PORT=3000
+MONGO_URI=mongodb://localhost:27017/validations
+DYNAMO_ENDPOINT=http://localhost:8000
+DYNAMO_TABLE=validation_audit
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=local
+AWS_SECRET_ACCESS_KEY=local
+NATIONALIZE_BASE_URL=https://api.nationalize.io
+# Opcional: la API funciona sin key (límite de 10 consultas al día)
+NATIONALIZE_API_KEY=
+NATIONALIZE_TIMEOUT_MS=3000
+# Umbral de coincidencia de país, rango [0, 1], límite inclusivo
+MATCH_THRESHOLD=0.10
+```
+
+- `NATIONALIZE_API_KEY` puede quedar vacía. Para más de 10 registros al día, pega ahí una key gratuita de [nationalize.io](https://nationalize.io).
+- Con Docker, el `.env` es opcional: el contenedor ya trae las URLs internas de MongoDB y DynamoDB (esas no se toman del `.env`) y, si el archivo existe, lee de ahí el resto, como la key de Nationalize y el umbral. En modo normal sí es obligatorio.
+- El `.env` está en `.gitignore`: nunca se sube al repositorio.
+
+**3. Elige cómo correrlo**
+
+- **Con Docker (un solo comando):** `docker compose up --build`. Ver [Inicio rápido](#inicio-rápido-un-solo-comando).
+- **Normal (Node en tu máquina):** levantar las bases de datos, crear la tabla y arrancar. Ver [Puesta en marcha (desarrollo)](#puesta-en-marcha-desarrollo).
+
+En ambos casos el servicio queda en `http://localhost:3000` y se prueba con la colección de Postman (`postman/`).
+
 ## Inicio rápido (un solo comando)
 
 Solo necesitas Docker con Docker Compose:
