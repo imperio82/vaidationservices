@@ -1,0 +1,744 @@
+{
+  "info": {
+    "name": "Servicio de validaciones",
+    "_postman_id": "b1f6a7a2-5c1e-4d7b-9a51-3e1f0c9d2a10",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "# Servicio de validaciones\n\nAPI que **registra o verifica personas por cédula**. Tiene solo dos endpoints:\n\n| Endpoint | Para qué sirve |\n|---|---|\n| `POST /validations` | Si la cédula es nueva, **registra** a la persona: consulta Nationalize.io con el primer nombre, emite un veredicto de nacionalidad, guarda en MongoDB y audita en DynamoDB Local. Si la cédula ya existe, **verifica** que el nombre y el país coincidan con lo registrado (o lanza una alerta). |\n| `GET /validations/:id` | Consulta un registro guardado por su id. |\n\n## Por qué un solo POST para registrar y verificar\n\nLa regla de negocio es **una persona por cédula**. La cédula decide qué ocurre: la primera vez se registra (201) y las siguientes se comprueba la identidad (200 si coincide, 409 si no). Nunca se crea un segundo registro para la misma cédula.\n\n## Cómo usar la colección\n\n1. Levanta el servicio siguiendo el README (`docker compose up -d`, `npm run table:create`, `npm run start:dev`).\n2. Ajusta la variable de colección `baseUrl` si no usas `http://localhost:3000`.\n3. Ejecuta las carpetas **en orden** (o toda la colección con el Runner). Las peticiones guardan automáticamente la cédula y el id que usan las siguientes.\n\n## Veredictos (status) al registrar\n\n- `APPROVED`: el país enviado aparece en la predicción con probabilidad ≥ `MATCH_THRESHOLD` (0.10 por defecto).\n- `REJECTED`: hay predicción, pero el país no aparece o no llega al umbral. **No es un error**: responde 201.\n- `INCONCLUSIVE`: Nationalize no tiene datos del nombre (`country: []`).\n- `NOT_EVALUATED`: no se envió `countryCode`.\n\n## Errores que no se pueden forzar desde Postman\n\nDependen de Nationalize.io y están cubiertos por las pruebas automáticas (`npm run test:e2e`):\n\n- `502 EXTERNAL_SERVICE_ERROR`: timeout, error de red o 5xx tras 1 reintento; 401/402 de la API.\n- `503 EXTERNAL_RATE_LIMITED`: Nationalize respondió 429 (incluye `Retry-After`).\n- `422 NAME_NOT_PROCESSABLE`: Nationalize no pudo analizar el nombre.\n- `500 AUDIT_WRITE_FAILED`: falló DynamoDB (por ejemplo, no se creó la tabla de auditoría)."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "description": "URL base del servicio"
+    },
+    {
+      "key": "docFlujo",
+      "value": "",
+      "description": "Cédula del flujo registrar → verificar → alertar (se genera sola)"
+    },
+    {
+      "key": "validationId",
+      "value": "",
+      "description": "Id del registro creado en el flujo (se guarda solo)"
+    },
+    {
+      "key": "docSinPais",
+      "value": "",
+      "description": "Cédula registrada sin país (se genera sola)"
+    },
+    {
+      "key": "docRechazo",
+      "value": "",
+      "description": "Cédula registrada con veredicto REJECTED (se genera sola)"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Registro (cédula nueva)",
+      "description": "Primer `POST` de una cédula: el servicio extrae el **primer nombre** (normalizado: minúsculas, sin tildes), consulta Nationalize.io **solo con él**, compara la nacionalidad probable con el `countryCode` (si viene), guarda el registro en MongoDB y escribe el evento `REGISTERED` en DynamoDB. Responde **201** con `Location: /validations/{id}`.\n\n**Por qué solo el primer nombre:** Nationalize predice mejor con un nombre de pila y nunca recibe el nombre completo, la cédula ni el país (minimiza datos personales enviados fuera).",
+      "item": [
+        {
+          "name": "Registrar con país coherente → 201 APPROVED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Jhon Anderson García\",\n  \"documentNumber\": \"{{docFlujo}}\",\n  \"countryCode\": \"co\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** registrar una persona cuyo país declarado coincide con la nacionalidad probable del nombre.\n\n**Por qué responde APPROVED:** para `jhon`, Nationalize devuelve CO con ~0.48 (≥ 0.10).\n\nGuarda `docFlujo` y `validationId` para las carpetas 2 y 3. `countryCode` se acepta en minúsculas y se normaliza a `CO`."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Cédula nueva en cada ejecución (10 dígitos) para que siempre se registre.",
+                  "pm.collectionVariables.set('docFlujo', String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('outcome REGISTERED y status APPROVED', () => { pm.expect(body.outcome).to.eql('REGISTERED'); pm.expect(body.status).to.eql('APPROVED'); });",
+                  "pm.test('Cabecera Location', () => pm.expect(pm.response.headers.get('Location')).to.eql('/validations/' + body.id));",
+                  "pm.collectionVariables.set('validationId', body.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Registrar con país no coherente → 201 REJECTED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Jhon Pérez\",\n  \"documentNumber\": \"{{docRechazo}}\",\n  \"countryCode\": \"AR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** mostrar que un país que no encaja con el nombre **no es un error de la petición**: el registro se crea igual, con veredicto `REJECTED`, y queda auditado.\n\n**Por qué REJECTED:** AR no aparece en la predicción de `jhon`, así que `matchedProbability` es `null`."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Cédula nueva en cada ejecución (10 dígitos) para que siempre se registre.",
+                  "pm.collectionVariables.set('docRechazo', String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 201', () => pm.response.to.have.status(201));",
+                  "pm.test('status REJECTED y matchedProbability null', () => { const b = pm.response.json(); pm.expect(b.status).to.eql('REJECTED'); pm.expect(b.matchedProbability).to.eql(null); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Registrar sin país (mínimo válido) → 201 NOT_EVALUATED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ana Pérez\",\n  \"documentNumber\": \"{{docSinPais}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** el enunciado solo exige nombre y documento; `countryCode` es opcional.\n\n**Por qué NOT_EVALUATED:** sin país no hay nada que comparar. Igualmente se consulta Nationalize y se guarda la predicción para auditoría. `countryCode: null` o `\"\"` se tratan igual que ausente."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Cédula nueva en cada ejecución (10 dígitos) para que siempre se registre.",
+                  "pm.collectionVariables.set('docSinPais', String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 201', () => pm.response.to.have.status(201));",
+                  "pm.test('status NOT_EVALUATED', () => pm.expect(pm.response.json().status).to.eql('NOT_EVALUATED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Verificación (cédula ya registrada)",
+      "description": "`POST` de una cédula que **ya existe**: no se llama a Nationalize ni se modifica MongoDB. Se compara el **nombre completo** (sin importar mayúsculas, tildes ni espacios extra) y el `countryCode` (solo si viene en la petición **y** está registrado).\n\n- Coincide → **200 VERIFIED** con el veredicto original del registro. Auditoría `VERIFIED`.\n- No coincide → **409 IDENTITY_MISMATCH** (alerta). Auditoría `MISMATCH_ALERT` con los campos que difieren.\n\n**Por qué el 409 no dice qué campo falló:** para no filtrar información de la cédula a quien está probando datos. El detalle solo queda en la auditoría.\n\nRequiere haber ejecutado antes la carpeta 1.",
+      "item": [
+        {
+          "name": "Mismos datos con otro formato → 200 VERIFIED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"  JHON  anderson GARCIA \",\n  \"documentNumber\": \"{{docFlujo}}\",\n  \"countryCode\": \"CO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** confirmar la identidad de alguien ya registrado.\n\n**Por qué coincide:** `\"  JHON  anderson GARCIA \"` y `\"Jhon Anderson García\"` son el mismo nombre una vez normalizados (mayúsculas, tildes y espacios no importan)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('outcome VERIFIED, mismo id y veredicto original', () => { const b = pm.response.json(); pm.expect(b.outcome).to.eql('VERIFIED'); pm.expect(b.id).to.eql(pm.collectionVariables.get('validationId')); pm.expect(b.status).to.eql('APPROVED'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mismo nombre sin país → 200 VERIFIED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Jhon Anderson García\",\n  \"documentNumber\": \"{{docFlujo}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** verificar sin declarar país.\n\n**Por qué coincide:** el país solo se compara si existe en la petición y en el registro; si falta en uno de los dos lados, no bloquea."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Otro nombre → 409 IDENTITY_MISMATCH",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Pedro Anderson García\",\n  \"documentNumber\": \"{{docFlujo}}\",\n  \"countryCode\": \"CO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** detectar que alguien usa una cédula registrada con otro nombre.\n\n**Por qué 409:** el nombre completo normalizado no coincide con el registrado. El registro no cambia y se audita `MISMATCH_ALERT` con `mismatchFields: [\"name\"]`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error.code = IDENTITY_MISMATCH', () => pm.expect(pm.response.json().error.code).to.eql('IDENTITY_MISMATCH'));",
+                  "pm.test('No revela datos guardados', () => pm.expect(pm.response.json().error.details).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Otro país → 409 IDENTITY_MISMATCH",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Jhon Anderson García\",\n  \"documentNumber\": \"{{docFlujo}}\",\n  \"countryCode\": \"PE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** detectar que el país declarado no es el registrado.\n\n**Por qué 409 aunque PE pasaría el umbral:** en la verificación no se vuelve a evaluar la nacionalidad; se compara contra el país **registrado** (CO). Auditoría con `mismatchFields: [\"countryCode\"]`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error.code = IDENTITY_MISMATCH', () => pm.expect(pm.response.json().error.code).to.eql('IDENTITY_MISMATCH'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cédula REJECTED con datos iguales → 200 VERIFIED (status REJECTED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"jhon perez\",\n  \"documentNumber\": \"{{docRechazo}}\",\n  \"countryCode\": \"AR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** mostrar que la verificación devuelve el **veredicto original** del registro.\n\n**Por qué:** la identidad coincide (200), pero el registro se creó como `REJECTED` y eso no cambia."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Conserva status REJECTED', () => pm.expect(pm.response.json().status).to.eql('REJECTED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Consulta por id",
+      "description": "`GET /validations/:id` devuelve el registro completo guardado en MongoDB: nombre, `firstNameSent` (el valor exacto enviado a Nationalize, para auditar el enriquecimiento), cédula, país, predicción y veredicto con el umbral vigente al registrar. No consulta Nationalize ni DynamoDB.\n\n`nameNormalized` es interno y no se expone.",
+      "item": [
+        {
+          "name": "Registro existente → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/validations/{{validationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations",
+                "{{validationId}}"
+              ]
+            },
+            "description": "**Para qué:** recuperar un registro por su id (el que devolvió el POST de registro).\n\nUsa `{{validationId}}`, guardado por \"Registrar con país coherente\"."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Incluye firstNameSent y no expone nameNormalized', () => { const b = pm.response.json(); pm.expect(b.firstNameSent).to.eql('jhon'); pm.expect(b).to.not.have.property('nameNormalized'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Id válido inexistente → 404 VALIDATION_NOT_FOUND",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/validations/000000000000000000000000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations",
+                "000000000000000000000000"
+              ]
+            },
+            "description": "**Para qué:** distinguir \"no existe\" de \"id mal formado\".\n\n**Por qué 404:** el id tiene formato válido de ObjectId (24 hexadecimales) pero no hay registro con él."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error.code = VALIDATION_NOT_FOUND', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Id mal formado → 400 INVALID_ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/validations/abc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations",
+                "abc"
+              ]
+            },
+            "description": "**Para qué:** rechazar ids que no son ObjectId antes de consultar la base de datos.\n\n**Por qué 400:** `abc` no tiene 24 caracteres hexadecimales. `details` indica `field: \"id\"`, `type: \"INVALID_FORMAT\"`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code = INVALID_ID', () => pm.expect(pm.response.json().error.code).to.eql('INVALID_ID'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Errores de entrada (400)",
+      "description": "Las entradas inválidas se rechazan **antes de cualquier efecto** (sin consultas, sin llamadas externas, sin escrituras). La respuesta trae **todos** los errores a la vez en `details[]`, cada uno con:\n\n- `field`: el campo que falló.\n- `type`: tipo estable para que el frontend lo use (`REQUIRED`, `INVALID_TYPE`, `INVALID_FORMAT`, `TOO_SHORT`, `TOO_LONG`, `UNKNOWN_FIELD`, `INVALID_JSON`).\n- `message`: mensaje en español listo para mostrar.\n\n**Por qué no se devuelve el valor recibido:** para no repetir datos personales en la respuesta.\n\nReglas: `name` 2–100 caracteres, letras (con tildes y ñ), espacios, `'` y `-`, empezando por letra; `documentNumber` texto de 6–12 dígitos; `countryCode` opcional, 2 letras ISO 3166-1 alpha-2.",
+      "item": [
+        {
+          "name": "Varios errores a la vez → 400 VALIDATION_ERROR",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documentNumber\": \"12a\",\n  \"countryCode\": \"COL\",\n  \"extra\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** ver la retroalimentación completa por campo.\n\n**Resultado esperado:** `name/REQUIRED`, `documentNumber/INVALID_FORMAT`, `documentNumber/TOO_SHORT`, `countryCode/INVALID_FORMAT` y `extra/UNKNOWN_FIELD`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code = VALIDATION_ERROR', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_ERROR'));",
+                  "pm.test('Trae 5 errores', () => pm.expect(pm.response.json().error.details).to.have.lengthOf(5));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tipos incorrectos → 400 INVALID_TYPE",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": 123,\n  \"documentNumber\": 1020304050\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** mostrar que `documentNumber` debe enviarse como texto (para conservar ceros a la izquierda) y `name` también.\n\n**Resultado esperado:** `name/INVALID_TYPE` y `documentNumber/INVALID_TYPE`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code = VALIDATION_ERROR', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_ERROR'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Nombre con números → 400 INVALID_FORMAT",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ana123\",\n  \"documentNumber\": \"1234567890\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** el nombre solo admite letras, espacios, apóstrofos y guiones.\n\n**Resultado esperado:** `name/INVALID_FORMAT`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code = VALIDATION_ERROR', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_ERROR'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Campo no permitido → 400 UNKNOWN_FIELD",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Jhon García\",\n  \"documentNumber\": \"1234567890\",\n  \"firstName\": \"Jhon\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** el body acepta exactamente `name`, `documentNumber` y `countryCode`; cualquier otro campo se rechaza para evitar datos inesperados.\n\n**Resultado esperado:** `firstName/UNKNOWN_FIELD`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code = VALIDATION_ERROR', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_ERROR'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "JSON mal formado → 400 INVALID_JSON",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/validations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "validations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"name\": \"Jhon\", \"documentNumber\": ",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**Para qué:** un cuerpo que no es JSON válido responde con el mismo formato de error que el resto.\n\n**Resultado esperado:** `body/INVALID_JSON`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('type INVALID_JSON', () => pm.expect(pm.response.json().error.details[0].type).to.eql('INVALID_JSON'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

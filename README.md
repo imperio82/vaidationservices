@@ -93,6 +93,17 @@ No se aceptan campos adicionales (por ejemplo, `firstName`). El mínimo válido 
 - **País:** solo se compara si viene en la petición **y** existe en el registro. Si falta en cualquiera de los dos lados, no bloquea la verificación.
 - Coincide → `200 VERIFIED` con el veredicto **original** del registro (aunque fuera `REJECTED`). No coincide → `409 IDENTITY_MISMATCH`; la respuesta no dice qué campo difiere ni devuelve datos guardados. El detalle (`mismatchFields`) solo queda en la auditoría.
 
+### Colección de Postman
+
+En `postman/validation-service.postman_collection.json` hay una colección con todos los casos de uso, cada uno con su descripción de **para qué** sirve y **por qué** responde lo que responde. Importa el archivo en Postman (*Import*), ajusta la variable `baseUrl` si no usas `http://localhost:3000` y ejecuta las carpetas en orden (o toda la colección con el *Runner*):
+
+1. **Registro:** `201` con veredicto `APPROVED`, `REJECTED` y `NOT_EVALUATED`. Cada ejecución genera cédulas nuevas.
+2. **Verificación:** `200 VERIFIED` y `409 IDENTITY_MISMATCH` sobre las cédulas del paso 1.
+3. **Consulta por id:** `200`, `404` y `400`.
+4. **Errores de entrada:** `400` con el detalle por campo.
+
+Cada petición incluye pruebas que comprueban el código y el cuerpo de la respuesta.
+
 ### Ejemplos `curl`
 
 **Registro con país → `201 APPROVED`** (a Nationalize se envía `name=jhon`)
