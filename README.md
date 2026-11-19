@@ -28,14 +28,15 @@ AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=local
 AWS_SECRET_ACCESS_KEY=local
 NATIONALIZE_BASE_URL=https://api.nationalize.io
-# Opcional: la API funciona sin key (límite de 10 consultas al día)
-NATIONALIZE_API_KEY=
+# Key de Nationalize.io válida solo para evaluar esta prueba técnica
+NATIONALIZE_API_KEY=dd30224426e5f69251d517af4ef6c831
 NATIONALIZE_TIMEOUT_MS=3000
 # Umbral de coincidencia de país, rango [0, 1], límite inclusivo
 MATCH_THRESHOLD=0.10
 ```
 
-- `NATIONALIZE_API_KEY` puede quedar vacía. Para más de 10 registros al día, pega ahí una key gratuita de [nationalize.io](https://nationalize.io).
+- **Sobre la `NATIONALIZE_API_KEY`:** se incluye **solo para que puedan evaluar esta prueba técnica** sin el límite de 10 consultas al día. Es una key de plan gratuito, sin datos sensibles, y se revocará al terminar el proceso. En un proyecto real las keys nunca van en el repositorio: se guardan como secretos (`.env` fuera de git, o un gestor como AWS Secrets Manager).
+- Si se deja vacía, el servicio funciona igual con el límite de 10 registros al día. También se puede usar una key gratuita propia de [nationalize.io](https://nationalize.io).
 - Con Docker, el `.env` es opcional: el contenedor ya trae las URLs internas de MongoDB y DynamoDB (esas no se toman del `.env`) y, si el archivo existe, lee de ahí el resto, como la key de Nationalize y el umbral. En modo normal sí es obligatorio.
 - El `.env` está en `.gitignore`: nunca se sube al repositorio.
 
